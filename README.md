@@ -37,6 +37,7 @@ MetricsHub/
 |   |-- MetricsHub.Application/
 |   |-- MetricsHub.Infrastructure/
 |   |-- MetricsHub.Api/
+|   |-- MetricsHub.DeviceSimulator/
 |   `-- MetricsHub.Web/
 |-- tests/
 |   |-- MetricsHub.UnitTests/
@@ -52,6 +53,7 @@ MetricsHub/
 - **MetricsHub.Application**: Device and telemetry use cases, response models, validation, and focused persistence interfaces. It references only Domain and DI abstractions.
 - **MetricsHub.Infrastructure**: EF Core persistence, MySQL mappings, migrations, and future infrastructure services. It references Domain and Application.
 - **MetricsHub.Api**: Versioned REST controllers, request contracts, centralized ProblemDetails handling, dependency composition, health endpoint, and development OpenAPI document.
+- **MetricsHub.DeviceSimulator**: Standalone development console client that registers fake infrastructure machines and sends realistic telemetry over the public REST API.
 - **MetricsHub.Web**: Minimal Blazor Web App. No monitoring dashboard or external connections have been added.
 - **MetricsHub.UnitTests**: xUnit tests for Domain and, in future phases, Application behavior.
 - **MetricsHub.IntegrationTests**: xUnit project prepared for future API and Infrastructure integration tests. It contains no database tests.
@@ -61,8 +63,8 @@ MetricsHub/
 1. **Phase 1 - Solution architecture** — complete
 2. **Phase 2 - Domain model** — complete
 3. **Phase 3 - MySQL and EF Core** — complete
-4. **Phase 4 - REST API** — complete/current
-5. **Phase 5 - Metrics simulator**
+4. **Phase 4 - REST API** — complete
+5. **Phase 5 - Metrics simulator** — complete/current
 6. **Phase 6 - Redis**
 7. **Phase 7 - SignalR and alert processing**
 8. **Phase 8 - Blazor monitoring dashboard**
@@ -71,7 +73,58 @@ MetricsHub/
 
 ## Current status
 
-**Phase 4 - REST API** is complete. Devices can be managed and telemetry can be ingested and queried through application-layer use cases backed by MySQL. Redis and SignalR are not implemented; they belong to later phases.
+**Phase 5 - Metrics simulator** is complete. A standalone external client now produces realistic changing infrastructure telemetry through the REST API.
+
+## Device simulator
+
+`MetricsHub.DeviceSimulator` lets MetricsHub behave like a populated monitoring platform before a real Windows/Linux agent exists. It references no server project and communicates only through HTTP, using its own small copies of the public request contracts.
+
+The default configuration runs five independent fake machines:
+
+- `windows-dev-01` — Windows development workstation.
+- `windows-server-01` — Windows application server.
+- `linux-server-01` — Linux database server.
+- `vm-app-01` — lightly loaded application virtual machine.
+- `container-host-01` — busy container host.
+
+Each device reports `CpuUsage`, `MemoryUsage`, `DiskUsage`, `NetworkIn`, `NetworkOut`, and `Uptime`. Percent metrics remain between 0 and 100. Network traffic consistently uses `KB/s`, and uptime uses seconds.
+
+Values use stateful bounded random walks rather than unrelated random samples. CPU and memory move toward profile-specific baselines, disk changes very slowly, and network traffic follows a noisier bounded path. Low-probability CPU, memory, and network spikes create short bursts that gradually return toward normal. Uptime advances by elapsed interval time and is never regenerated per request.
+
+At startup, the client queries `GET /api/v1/devices`, reuses matching `DeviceKey` values, and registers missing devices through `POST /api/v1/devices`. A registration race returning 409 is treated as success. Each device then sends batches independently to `POST /api/v1/telemetry`. Temporary API failures are logged and retried in later cycles without terminating other simulations.
+
+Configuration lives in `src/MetricsHub.DeviceSimulator/appsettings.json`. Useful environment overrides include:
+
+```powershell
+$env:MetricsHub__ApiBaseUrl='https://localhost:7091'
+$env:Simulation__IntervalSeconds='5'
+$env:Simulation__Devices__0__DeviceKey='custom-dev-01'
+```
+
+Double underscores map to nested .NET configuration keys, and numeric segments address array entries.
+
+Run MySQL and apply migrations as described below, start the API, then launch the simulator in another terminal:
+
+```powershell
+dotnet run --project src/MetricsHub.Api
+dotnet run --project src/MetricsHub.DeviceSimulator
+```
+
+Press `Ctrl+C` to cancel all device loops and shut down gracefully. For local HTTPS certificate trust, run:
+
+```powershell
+dotnet dev-certs https --trust
+```
+
+Do not bypass certificate validation. Verify generated data with:
+
+```text
+GET /api/v1/devices
+GET /api/v1/devices/{deviceId}/telemetry?limit=100
+GET /api/v1/devices/{deviceId}/telemetry/latest
+```
+
+Redis is not implemented yet. SignalR is not implemented yet. The Blazor real-time dashboard and real Windows/Linux metric collection are not implemented yet; they belong to later phases.
 
 ## REST API
 

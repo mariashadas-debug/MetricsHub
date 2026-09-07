@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MetricsHub.Domain\MetricsHub.Domain.csproj" />
     <ProjectReference Include="..\..\src\MetricsHub.Application\MetricsHub.Application.csproj" />
+    <ProjectReference Include="..\..\src\MetricsHub.DeviceSimulator\MetricsHub.DeviceSimulator.csproj" />
   </ItemGroup>
 
 </Project>
