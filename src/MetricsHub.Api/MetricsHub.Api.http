@@ -4,3 +4,36 @@ GET {{MetricsHub.Api_HostAddress}}/health
 Accept: application/json
 
 ###
+
+GET {{MetricsHub.Api_HostAddress}}/api/v1/devices
+Accept: application/json
+
+###
+
+POST {{MetricsHub.Api_HostAddress}}/api/v1/devices
+Content-Type: application/json
+
+{
+  "deviceKey": "windows-pc-01",
+  "name": "Development PC",
+  "type": "Workstation",
+  "hostname": "DEV-PC-01",
+  "operatingSystem": "Windows 11",
+  "location": "Zlin"
+}
+
+###
+
+POST {{MetricsHub.Api_HostAddress}}/api/v1/telemetry
+Content-Type: application/json
+
+{
+  "deviceKey": "windows-pc-01",
+  "timestamp": "2026-09-07T18:30:00Z",
+  "metrics": [
+    { "type": "CpuUsage", "value": 43.8, "unit": "%" },
+    { "type": "MemoryUsage", "value": 68.2, "unit": "%" }
+  ]
+}
+
+###

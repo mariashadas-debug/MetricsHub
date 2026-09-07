@@ -4,6 +4,12 @@ namespace MetricsHub.Domain.Entities;
 
 public sealed class TelemetryPoint
 {
+    private TelemetryPoint()
+    {
+        Unit = null!;
+        Device = null!;
+    }
+
     public TelemetryPoint(
         Device device,
         MetricType metricType,
@@ -29,15 +35,15 @@ public sealed class TelemetryPoint
 
     public long Id { get; private set; }
 
-    public Guid DeviceId { get; }
+    public Guid DeviceId { get; private set; }
 
-    public MetricType MetricType { get; }
+    public MetricType MetricType { get; private set; }
 
-    public double Value { get; }
+    public double Value { get; private set; }
 
-    public string Unit { get; }
+    public string Unit { get; private set; }
 
-    public DateTime Timestamp { get; }
+    public DateTime Timestamp { get; private set; }
 
-    public Device Device { get; }
+    public Device Device { get; private set; }
 }

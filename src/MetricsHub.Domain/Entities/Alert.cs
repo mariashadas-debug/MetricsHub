@@ -4,6 +4,12 @@ namespace MetricsHub.Domain.Entities;
 
 public sealed class Alert
 {
+    private Alert()
+    {
+        Message = null!;
+        Device = null!;
+    }
+
     public Alert(
         Device device,
         AlertSeverity severity,
@@ -24,25 +30,25 @@ public sealed class Alert
         AlertRule = alertRule;
     }
 
-    public Guid Id { get; }
+    public Guid Id { get; private set; }
 
-    public Guid DeviceId { get; }
+    public Guid DeviceId { get; private set; }
 
-    public Guid? AlertRuleId { get; }
+    public Guid? AlertRuleId { get; private set; }
 
-    public AlertSeverity Severity { get; }
+    public AlertSeverity Severity { get; private set; }
 
-    public string Message { get; }
+    public string Message { get; private set; }
 
-    public DateTime CreatedAt { get; }
+    public DateTime CreatedAt { get; private set; }
 
     public DateTime? ResolvedAt { get; private set; }
 
     public bool IsResolved { get; private set; }
 
-    public Device Device { get; }
+    public Device Device { get; private set; }
 
-    public AlertRule? AlertRule { get; }
+    public AlertRule? AlertRule { get; private set; }
 
     public void Resolve()
     {

@@ -47,6 +47,50 @@ public sealed class DeviceTests
             new Device("Production server", deviceKey, DeviceType.Server));
     }
 
+    [Fact]
+    public void UpdateDetails_ChangesMutableFieldsButPreservesDeviceKey()
+    {
+        var device = CreateDevice();
+        var originalDeviceKey = device.DeviceKey;
+
+        device.UpdateDetails(
+            "Updated device",
+            DeviceType.Workstation,
+            "UPDATED-PC",
+            "Windows 11 Pro",
+            "Zlin",
+            false);
+
+        Assert.Equal(originalDeviceKey, device.DeviceKey);
+        Assert.Equal("Updated device", device.Name);
+        Assert.Equal(DeviceType.Workstation, device.Type);
+        Assert.False(device.IsEnabled);
+    }
+
+    [Fact]
+    public void RecordTelemetry_SetsOnlineStatusAndLastSeenTime()
+    {
+        var device = CreateDevice();
+        var timestamp = DateTime.UtcNow;
+
+        device.RecordTelemetry(timestamp);
+
+        Assert.Equal(DeviceStatus.Online, device.Status);
+        Assert.Equal(timestamp, device.LastSeenAt);
+    }
+
+    [Fact]
+    public void RecordTelemetry_WithOlderTimestamp_DoesNotMoveLastSeenBackward()
+    {
+        var device = CreateDevice();
+        var latestTimestamp = DateTime.UtcNow;
+        device.RecordTelemetry(latestTimestamp);
+
+        device.RecordTelemetry(latestTimestamp.AddMinutes(-5));
+
+        Assert.Equal(latestTimestamp, device.LastSeenAt);
+    }
+
     private static Device CreateDevice() =>
         new("Production server", "production-server-01", DeviceType.Server);
 }

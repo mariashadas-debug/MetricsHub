@@ -4,6 +4,11 @@ namespace MetricsHub.Domain.Entities;
 
 public sealed class AlertRule
 {
+    private AlertRule()
+    {
+        Name = null!;
+    }
+
     public AlertRule(
         string name,
         MetricType metricType,
@@ -25,21 +30,21 @@ public sealed class AlertRule
         Device = device;
     }
 
-    public Guid Id { get; }
+    public Guid Id { get; private set; }
 
-    public Guid? DeviceId { get; }
+    public Guid? DeviceId { get; private set; }
 
-    public string Name { get; }
+    public string Name { get; private set; }
 
-    public MetricType MetricType { get; }
+    public MetricType MetricType { get; private set; }
 
-    public ComparisonOperator Operator { get; }
+    public ComparisonOperator Operator { get; private set; }
 
-    public double Threshold { get; }
+    public double Threshold { get; private set; }
 
-    public AlertSeverity Severity { get; }
+    public AlertSeverity Severity { get; private set; }
 
     public bool IsEnabled { get; private set; }
 
-    public Device? Device { get; }
+    public Device? Device { get; private set; }
 }
