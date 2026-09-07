@@ -51,13 +51,21 @@ public sealed class Alert
     public AlertRule? AlertRule { get; private set; }
 
     public void Resolve()
+        => Resolve(DateTime.UtcNow);
+
+    public void Resolve(DateTime resolvedAt)
     {
         if (IsResolved)
         {
             return;
         }
 
+        if (resolvedAt.Kind != DateTimeKind.Utc)
+        {
+            throw new ArgumentException("Resolution timestamp must use UTC.", nameof(resolvedAt));
+        }
+
         IsResolved = true;
-        ResolvedAt = DateTime.UtcNow;
+        ResolvedAt = resolvedAt;
     }
 }

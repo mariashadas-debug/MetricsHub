@@ -37,6 +37,14 @@ internal sealed class DeviceRepository(MetricsHubDbContext context) : IDeviceRep
         await context.TelemetryPoints.AnyAsync(point => point.DeviceId == id, cancellationToken)
         || await context.Alerts.AnyAsync(alert => alert.DeviceId == id, cancellationToken);
 
+    public async Task<IReadOnlyList<Device>> GetStaleOnlineDevicesAsync(DateTime cutoff, CancellationToken cancellationToken) =>
+        await context.Devices
+            .Where(device => device.IsEnabled
+                && device.Status == MetricsHub.Domain.Enums.DeviceStatus.Online
+                && device.LastSeenAt.HasValue
+                && device.LastSeenAt.Value < cutoff)
+            .ToListAsync(cancellationToken);
+
     public void Add(Device device) => context.Devices.Add(device);
 
     public void Remove(Device device) => context.Devices.Remove(device);

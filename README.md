@@ -11,7 +11,7 @@ The project demonstrates how to incrementally design and deliver a production-mi
 - .NET 10, C# 14, ASP.NET Core 10 Web API, and REST APIs
 - Blazor Web App
 - Entity Framework Core and MySQL
-- Redis current-state storage; SignalR and background services (planned)
+- Redis current-state storage, SignalR server push, and background services
 - Dependency injection and structured logging
 - xUnit
 - Docker (planned)
@@ -27,12 +27,12 @@ DeviceSimulator
  ASP.NET API
       |
  Application
-    /     \
-   v       v
-MySQL    Redis
-History  Current state
-
-Web (independent; real-time dashboard not implemented)
+   /   |    \
+  v    v     v
+MySQL Redis SignalR
+  |          |
+History      v
+Alerts   Future Blazor
 ```
 
 ## Solution structure
@@ -63,7 +63,7 @@ MetricsHub/
 - **MetricsHub.DeviceSimulator**: Standalone development console client that registers fake infrastructure machines and sends realistic telemetry over the public REST API.
 - **MetricsHub.Web**: Minimal Blazor Web App. No monitoring dashboard or external connections have been added.
 - **MetricsHub.UnitTests**: xUnit tests for Domain and, in future phases, Application behavior.
-- **MetricsHub.IntegrationTests**: xUnit project prepared for future API and Infrastructure integration tests. It contains no database tests.
+- **MetricsHub.IntegrationTests**: Real MySQL, Redis, REST API, alert, offline-monitor, and SignalR tests using Testcontainers and `WebApplicationFactory`.
 
 ## Development roadmap
 
@@ -72,15 +72,15 @@ MetricsHub/
 3. **Phase 3 - MySQL and EF Core** — complete
 4. **Phase 4 - REST API** — complete
 5. **Phase 5 - Metrics simulator** — complete
-6. **Phase 6 - Redis** — complete/current
-7. **Phase 7 - SignalR and alert processing**
+6. **Phase 6 - Redis** — complete
+7. **Phase 7 - SignalR and alert processing** — complete/current
 8. **Phase 8 - Blazor monitoring dashboard**
 9. **Phase 9 - Real system metrics agent**
 10. **Phase 10 - Docker, testing and production hardening**
 
 ## Current status
 
-**Phase 6 - Redis current state** is complete. MySQL remains durable history while Redis supplies reconstructable, low-latency current device state.
+**Phase 7 - SignalR and alert processing** is complete. Telemetry now drives durable threshold alerts, live server events, and configurable online/offline transitions.
 
 ## Device simulator
 
@@ -131,7 +131,7 @@ GET /api/v1/devices/{deviceId}/telemetry?limit=100
 GET /api/v1/devices/{deviceId}/telemetry/latest
 ```
 
-The simulator remains unaware of Redis and sends the same public HTTP payloads. SignalR, the Blazor real-time dashboard, offline detection, alert evaluation, and real Windows/Linux metric collection are not implemented yet; they belong to later phases.
+The simulator remains unaware of Redis and SignalR and sends the same public HTTP payloads. The Blazor real-time dashboard and real Windows/Linux metric collection are not implemented yet; they belong to later phases.
 
 ## REST API
 
@@ -148,6 +148,14 @@ The `/api/v1` API exposes application use cases without returning EF entities or
 | `GET` | `/api/v1/devices/{deviceId}/telemetry` | Query telemetry history |
 | `GET` | `/api/v1/devices/{deviceId}/telemetry/latest` | Get the latest value per metric type |
 | `GET` | `/api/v1/devices/{deviceId}/state` | Get reconstructable current state, primarily from Redis |
+| `GET` | `/api/v1/alerts` | Query bounded alert history with filters |
+| `GET` | `/api/v1/alerts/{id}` | Get one alert |
+| `GET` | `/api/v1/devices/{deviceId}/alerts` | Get a device's alerts |
+| `GET` | `/api/v1/alert-rules` | List alert rules |
+| `GET` | `/api/v1/alert-rules/{id}` | Get one alert rule |
+| `POST` | `/api/v1/alert-rules` | Create a global or device rule |
+| `PUT` | `/api/v1/alert-rules/{id}` | Update a rule and enabled state |
+| `DELETE` | `/api/v1/alert-rules/{id}` | Delete a rule while retaining alert history |
 
 Register a device:
 
@@ -198,6 +206,47 @@ Redis is an optimization for dashboard-oriented current reads; it never replaces
 Updates run through one atomic Lua script. Partial batches update only their included metric fields, so other latest values remain. Per-metric timestamp comparisons prevent older or concurrently delayed telemetry from moving current values backward. The same comparison protects `LastSeenAt` and status. Every successful state update refreshes a configurable 24-hour TTL (`Redis:StateTtlHours`); expiration is cache cleanup only, not offline detection.
 
 `GET /api/v1/devices/{deviceId}/state` first verifies the device in MySQL and reads Redis. On a cache miss it executes the existing server-side latest-row-per-metric query, rebuilds the state (including an empty metric list for a new device), repopulates Redis, and returns it. A successful physical device deletion removes its state key; a history-blocked deletion leaves it intact.
+
+## SignalR and live events
+
+The transport-only `MonitoringHub` is mapped at `/hubs/monitoring`. New connections receive the global stream. Calling `SubscribeToDevice(deviceId)` switches a connection to `device:{deviceId}`; `UnsubscribeFromDevice(deviceId)` returns it to the global stream. No authentication is applied in this phase.
+
+Server event names and payload purposes:
+
+- `TelemetryReceived` — one accepted telemetry batch with its metrics.
+- `DeviceStateUpdated` — current status, last-seen timestamp, and latest metrics.
+- `DeviceStatusChanged` — only real transitions, including `Online -> Offline` and `Offline -> Online`.
+- `AlertRaised` — a newly persisted threshold alert.
+- `AlertResolved` — an existing alert that returned to normal.
+
+Enums use readable strings and timestamps remain UTC. SignalR is non-durable presentation delivery: publishing happens only after the MySQL commit, and a publishing failure is logged without failing telemetry ingestion.
+
+For automated SignalR validation, run the integration suite shown below. It uses an actual SignalR client over the `WebApplicationFactory` test server, `TaskCompletionSource` synchronization, and bounded timeouts rather than arbitrary sleeps.
+
+## Alert processing
+
+Enabled global rules (`DeviceId: null`) and enabled device-specific rules are evaluated against metrics present in each incoming batch. All existing comparison operators are supported. `Equal` deliberately uses exact `double` equality; clients needing a tolerance should express it with boundary rules rather than an implicit hidden epsilon.
+
+Alert evaluation and historical telemetry share the scoped EF context. New alerts and resolutions are staged before the existing single `SaveChangesAsync`, so telemetry, device state, and alert transitions commit together. Redis and SignalR are updated afterward.
+
+The lifecycle is `normal -> unresolved alert -> resolved alert`. Continued violation reuses the unresolved alert for the same device/rule. Returning to normal calls the domain `Alert.Resolve` behavior. Crossing again after resolution creates a new historical alert. Messages include metric, value/unit, comparison, threshold, and device key. Alerts remain authoritative in MySQL and are never stored only in Redis.
+
+`GET /api/v1/alerts` supports `isResolved`, `severity`, `deviceId`, and a `limit` from 1 to 1,000. Alert-rule requests validate required names, enum input, finite thresholds, and optional referenced devices.
+
+## Offline detection
+
+`DeviceOfflineMonitor` is a small hosted service that creates a DI scope for each check and delegates to the scoped Application monitoring service; it never holds a `DbContext`. The query uses only enabled, currently-online devices with a non-null stale `LastSeenAt`. Newly registered devices stay `Unknown` until their first telemetry.
+
+Defaults:
+
+```json
+"Monitoring": {
+  "OfflineAfterSeconds": 30,
+  "OfflineCheckIntervalSeconds": 10
+}
+```
+
+Override them with `Monitoring__OfflineAfterSeconds` and `Monitoring__OfflineCheckIntervalSeconds`. Both must be greater than zero. An offline transition is persisted to MySQL first, then Redis is updated without removing metrics, followed by `DeviceStatusChanged` and `DeviceStateUpdated`. The next accepted telemetry changes the device back to `Online` and publishes that transition. Redis TTL is not used to decide offline status, and offline transitions do not create a separate alert type.
 
 Status behavior:
 
@@ -334,4 +383,4 @@ Open the URL printed in the terminal. The current UI is the minimal Blazor start
 
 `src/MetricsHub.Api/appsettings.json` contains empty `MySql` and `Redis` connection placeholders. Use `ConnectionStrings__MySql` and `ConnectionStrings__Redis`. Keep credentials outside tracked configuration through user secrets, environment variables, or ignored local files.
 
-SignalR and browser push are not implemented. The Blazor real-time dashboard is not implemented. Offline detection and alert evaluation are not implemented. The real system Agent is not implemented. Those capabilities remain later phases.
+The Blazor real-time dashboard is not implemented. The real Windows/Linux system Agent is not implemented. Those capabilities remain later phases.

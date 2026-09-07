@@ -1,6 +1,9 @@
 using MetricsHub.Application.Abstractions.Persistence;
+using MetricsHub.Application.Abstractions.Realtime;
+using MetricsHub.Application.Alerts;
 using MetricsHub.Application.Common.Exceptions;
 using MetricsHub.Application.DeviceStates;
+using MetricsHub.Application.Realtime;
 using MetricsHub.Domain.Entities;
 using Microsoft.Extensions.Logging;
 
@@ -10,6 +13,9 @@ internal sealed class TelemetryService(
     IDeviceRepository deviceRepository,
     ITelemetryRepository telemetryRepository,
     IDeviceStateStore deviceStateStore,
+    IAlertEvaluationService alertEvaluationService,
+    IRealtimeNotifier realtimeNotifier,
+    TimeProvider timeProvider,
     ILogger<TelemetryService> logger) : ITelemetryService
 {
     public const int MaximumHistoryLimit = 1000;
@@ -56,8 +62,11 @@ internal sealed class TelemetryService(
                 command.Timestamp);
         }).ToArray();
 
+        var previousStatus = device.Status;
         telemetryRepository.AddRange(points);
         device.RecordTelemetry(command.Timestamp);
+        var alertTransitions = await alertEvaluationService.EvaluateAsync(
+            device.Id, device.DeviceKey, command.Metrics, cancellationToken);
         await telemetryRepository.SaveChangesAsync(cancellationToken);
 
         var state = new DeviceState(
@@ -79,15 +88,20 @@ internal sealed class TelemetryService(
                             point.Timestamp);
                     }));
 
+        DeviceState notificationState;
         try
         {
             await deviceStateStore.SetAsync(state, cancellationToken);
             logger.LogDebug("Redis state updated: DeviceId={DeviceId}", device.Id);
+            notificationState = await deviceStateStore.GetAsync(device.Id, cancellationToken) ?? state;
         }
         catch (DeviceStateStoreException exception)
         {
             logger.LogWarning(exception, "Redis state update failed: DeviceId={DeviceId}", device.Id);
+            notificationState = await RebuildState(device, cancellationToken);
         }
+
+        await PublishNotifications(device, previousStatus, command, notificationState, alertTransitions, cancellationToken);
     }
 
     public async Task<IReadOnlyList<TelemetryPointResponse>> GetHistoryAsync(
@@ -177,6 +191,54 @@ internal sealed class TelemetryService(
         {
             throw new NotFoundException($"Device '{deviceId}' was not found.");
         }
+    }
+
+    private async Task<DeviceState> RebuildState(Device device, CancellationToken cancellationToken)
+    {
+        var latest = await telemetryRepository.GetLatestByMetricAsync(device.Id, cancellationToken);
+        return new DeviceState(device.Id, device.DeviceKey, device.Status, device.LastSeenAt,
+            latest.ToDictionary(point => point.MetricType, point => new LatestMetricState(point.MetricType, point.Value, point.Unit, point.Timestamp)));
+    }
+
+    private async Task PublishNotifications(
+        Device device,
+        MetricsHub.Domain.Enums.DeviceStatus previousStatus,
+        IngestTelemetryCommand command,
+        DeviceState state,
+        AlertEvaluationResult transitions,
+        CancellationToken cancellationToken)
+    {
+        await BestEffortNotify(() => realtimeNotifier.TelemetryReceivedAsync(
+            new TelemetryReceivedEvent(device.Id, device.DeviceKey, command.Timestamp,
+                command.Metrics.Select(metric => new LatestMetricState(metric.Type, metric.Value, metric.Unit, command.Timestamp)).ToArray()), cancellationToken), "TelemetryReceived", cancellationToken);
+        await BestEffortNotify(() => realtimeNotifier.DeviceStateUpdatedAsync(new DeviceStateUpdatedEvent(
+            state.DeviceId, state.DeviceKey, state.Status, state.LastSeenAt, state.LatestMetrics.Values.ToArray()), cancellationToken), "DeviceStateUpdated", cancellationToken);
+
+        if (previousStatus != device.Status)
+        {
+            logger.LogInformation("Device returned online: DeviceId={DeviceId}", device.Id);
+            await BestEffortNotify(() => realtimeNotifier.DeviceStatusChangedAsync(
+                new DeviceStatusChangedEvent(device.Id, device.DeviceKey, previousStatus, device.Status, timeProvider.GetUtcNow().UtcDateTime), cancellationToken), "DeviceStatusChanged", cancellationToken);
+        }
+
+        foreach (var alert in transitions.Raised)
+        {
+            await BestEffortNotify(() => realtimeNotifier.AlertRaisedAsync(
+                new AlertRaisedEvent(alert.Id, alert.DeviceId, alert.AlertRuleId!.Value, alert.Severity, alert.Message, alert.CreatedAt), cancellationToken), "AlertRaised", cancellationToken);
+        }
+
+        foreach (var alert in transitions.Resolved)
+        {
+            await BestEffortNotify(() => realtimeNotifier.AlertResolvedAsync(
+                new AlertResolvedEvent(alert.Id, alert.DeviceId, alert.ResolvedAt!.Value), cancellationToken), "AlertResolved", cancellationToken);
+        }
+    }
+
+    private async Task BestEffortNotify(Func<Task> publish, string eventType, CancellationToken cancellationToken)
+    {
+        try { await publish(); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception) { logger.LogWarning(exception, "SignalR publish failed: EventType={EventType}", eventType); }
     }
 
     private static void ValidateHistoryQuery(TelemetryHistoryQuery query)

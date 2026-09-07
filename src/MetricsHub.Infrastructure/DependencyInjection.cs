@@ -30,6 +30,7 @@ public static class DependencyInjection
 
         services.AddScoped<IDeviceRepository, DeviceRepository>();
         services.AddScoped<ITelemetryRepository, TelemetryRepository>();
+        services.AddScoped<IAlertRepository, AlertRepository>();
         services.AddOptions<RedisOptions>()
             .Configure(options =>
             {

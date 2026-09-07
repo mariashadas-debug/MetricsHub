@@ -93,4 +93,15 @@ public sealed class Device
             LastSeenAt = timestamp;
         }
     }
+
+    public bool MarkOffline()
+    {
+        if (Status != DeviceStatus.Online)
+        {
+            return false;
+        }
+
+        Status = DeviceStatus.Offline;
+        return true;
+    }
 }

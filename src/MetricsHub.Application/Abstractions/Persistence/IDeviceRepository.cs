@@ -11,6 +11,7 @@ public interface IDeviceRepository
     Task<Device?> GetByKeyAsync(string deviceKey, bool trackChanges, CancellationToken cancellationToken);
 
     Task<bool> HasHistoricalDataAsync(Guid id, CancellationToken cancellationToken);
+    Task<IReadOnlyList<Device>> GetStaleOnlineDevicesAsync(DateTime cutoff, CancellationToken cancellationToken);
 
     void Add(Device device);
 

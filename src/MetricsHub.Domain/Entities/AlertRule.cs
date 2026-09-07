@@ -47,4 +47,25 @@ public sealed class AlertRule
     public bool IsEnabled { get; private set; }
 
     public Device? Device { get; private set; }
+
+    public void Update(
+        string name,
+        MetricType metricType,
+        ComparisonOperator @operator,
+        double threshold,
+        AlertSeverity severity,
+        bool isEnabled,
+        Device? device)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        Name = name;
+        MetricType = metricType;
+        Operator = @operator;
+        Threshold = threshold;
+        Severity = severity;
+        IsEnabled = isEnabled;
+        Device = device;
+        DeviceId = device?.Id;
+    }
 }
