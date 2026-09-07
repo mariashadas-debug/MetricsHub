@@ -9,7 +9,8 @@ using MetricsHub.IntegrationTests.Persistence;
 
 namespace MetricsHub.IntegrationTests.Api;
 
-public sealed class MetricsHubApiTests : IClassFixture<MySqlDatabaseFixture>, IDisposable
+[Collection(InfrastructureCollection.Name)]
+public sealed class MetricsHubApiTests : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly MetricsHubApiFactory _factory;
@@ -17,7 +18,7 @@ public sealed class MetricsHubApiTests : IClassFixture<MySqlDatabaseFixture>, ID
 
     public MetricsHubApiTests(MySqlDatabaseFixture fixture)
     {
-        _factory = new MetricsHubApiFactory(fixture.ConnectionString);
+        _factory = new MetricsHubApiFactory(fixture.ConnectionString, fixture.RedisConnectionString);
         _client = _factory.CreateClient();
     }
 

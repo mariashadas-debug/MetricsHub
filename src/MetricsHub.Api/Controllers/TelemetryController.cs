@@ -1,4 +1,5 @@
 using MetricsHub.Api.Contracts.Telemetry;
+using MetricsHub.Api.Contracts.DeviceStates;
 using MetricsHub.Application.Telemetry;
 using MetricsHub.Domain.Enums;
 using Microsoft.AspNetCore.Mvc;
@@ -52,4 +53,28 @@ public sealed class TelemetryController(ITelemetryService telemetryService) : Co
         Guid deviceId,
         CancellationToken cancellationToken) =>
         Ok(await telemetryService.GetLatestAsync(deviceId, cancellationToken));
+
+    [HttpGet("devices/{deviceId}/state")]
+    [ProducesResponseType<DeviceStateResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<DeviceStateResponse>> GetState(
+        Guid deviceId,
+        CancellationToken cancellationToken)
+    {
+        var state = await telemetryService.GetStateAsync(deviceId, cancellationToken);
+
+        return Ok(new DeviceStateResponse(
+            state.DeviceId,
+            state.DeviceKey,
+            state.Status,
+            state.LastSeenAt,
+            state.LatestMetrics.Values
+                .OrderBy(metric => metric.Type)
+                .Select(metric => new LatestMetricStateResponse(
+                    metric.Type,
+                    metric.Value,
+                    metric.Unit,
+                    metric.Timestamp))
+                .ToArray()));
+    }
 }

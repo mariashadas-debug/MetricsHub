@@ -11,21 +11,28 @@ The project demonstrates how to incrementally design and deliver a production-mi
 - .NET 10, C# 14, ASP.NET Core 10 Web API, and REST APIs
 - Blazor Web App
 - Entity Framework Core and MySQL
-- Redis, SignalR, and background services (planned)
+- Redis current-state storage; SignalR and background services (planned)
 - Dependency injection and structured logging
 - xUnit
 - Docker (planned)
 
 ## High-level architecture
 
-MetricsHub follows Clean Architecture. Domain is the dependency-free core. Application builds future use cases on Domain. Infrastructure will implement technical concerns required by Application. Api is the HTTP host and composition root. Web is the separate user interface.
+MetricsHub follows Clean Architecture. Domain is the dependency-free core. Application owns use cases and infrastructure-facing abstractions. Infrastructure implements MySQL history and Redis current state. Api is the HTTP host and composition root. Web remains a separate user interface.
 
 ```text
-Api -> Infrastructure -> Application -> Domain
- |                         ^
- +-------------------------+
+DeviceSimulator
+      |
+      v
+ ASP.NET API
+      |
+ Application
+    /     \
+   v       v
+MySQL    Redis
+History  Current state
 
-Web (independent in Phase 1)
+Web (independent; real-time dashboard not implemented)
 ```
 
 ## Solution structure
@@ -50,8 +57,8 @@ MetricsHub/
 ## Project responsibilities
 
 - **MetricsHub.Domain**: Core entities, enums, and domain rules. Its objects protect required values and lifecycle state without depending on persistence or web frameworks.
-- **MetricsHub.Application**: Device and telemetry use cases, response models, validation, and focused persistence interfaces. It references only Domain and DI abstractions.
-- **MetricsHub.Infrastructure**: EF Core persistence, MySQL mappings, migrations, and future infrastructure services. It references Domain and Application.
+- **MetricsHub.Application**: Device and telemetry use cases, response/state models, validation, and focused persistence interfaces. It references only Domain and framework abstractions.
+- **MetricsHub.Infrastructure**: EF Core/MySQL history persistence plus the StackExchange.Redis current-state implementation. It references Domain and Application.
 - **MetricsHub.Api**: Versioned REST controllers, request contracts, centralized ProblemDetails handling, dependency composition, health endpoint, and development OpenAPI document.
 - **MetricsHub.DeviceSimulator**: Standalone development console client that registers fake infrastructure machines and sends realistic telemetry over the public REST API.
 - **MetricsHub.Web**: Minimal Blazor Web App. No monitoring dashboard or external connections have been added.
@@ -64,8 +71,8 @@ MetricsHub/
 2. **Phase 2 - Domain model** — complete
 3. **Phase 3 - MySQL and EF Core** — complete
 4. **Phase 4 - REST API** — complete
-5. **Phase 5 - Metrics simulator** — complete/current
-6. **Phase 6 - Redis**
+5. **Phase 5 - Metrics simulator** — complete
+6. **Phase 6 - Redis** — complete/current
 7. **Phase 7 - SignalR and alert processing**
 8. **Phase 8 - Blazor monitoring dashboard**
 9. **Phase 9 - Real system metrics agent**
@@ -73,7 +80,7 @@ MetricsHub/
 
 ## Current status
 
-**Phase 5 - Metrics simulator** is complete. A standalone external client now produces realistic changing infrastructure telemetry through the REST API.
+**Phase 6 - Redis current state** is complete. MySQL remains durable history while Redis supplies reconstructable, low-latency current device state.
 
 ## Device simulator
 
@@ -124,7 +131,7 @@ GET /api/v1/devices/{deviceId}/telemetry?limit=100
 GET /api/v1/devices/{deviceId}/telemetry/latest
 ```
 
-Redis is not implemented yet. SignalR is not implemented yet. The Blazor real-time dashboard and real Windows/Linux metric collection are not implemented yet; they belong to later phases.
+The simulator remains unaware of Redis and sends the same public HTTP payloads. SignalR, the Blazor real-time dashboard, offline detection, alert evaluation, and real Windows/Linux metric collection are not implemented yet; they belong to later phases.
 
 ## REST API
 
@@ -140,6 +147,7 @@ The `/api/v1` API exposes application use cases without returning EF entities or
 | `POST` | `/api/v1/telemetry` | Ingest a metric batch |
 | `GET` | `/api/v1/devices/{deviceId}/telemetry` | Query telemetry history |
 | `GET` | `/api/v1/devices/{deviceId}/telemetry/latest` | Get the latest value per metric type |
+| `GET` | `/api/v1/devices/{deviceId}/state` | Get reconstructable current state, primarily from Redis |
 
 Register a device:
 
@@ -169,7 +177,7 @@ Ingest multiple measurements atomically:
 }
 ```
 
-Each metric becomes one `TelemetryPoint`; the batch and device state update use one save operation. Successful ingestion sets the device `Online` and advances `LastSeenAt` when the accepted timestamp is newer. Disabled devices return a conflict.
+Each metric becomes one historical `TelemetryPoint`. The batch and device changes are committed to MySQL with one save operation before Redis is updated. Successful ingestion sets the device `Online` and advances `LastSeenAt` when the accepted timestamp is newer. Disabled devices return a conflict. If Redis is temporarily unavailable after that durable commit, the request still succeeds and the failure is logged; current state can be rebuilt from MySQL.
 
 All enums use readable JSON strings. API timestamps must be explicit ISO-8601 UTC values ending in `Z`; unspecified and local timestamps are rejected.
 
@@ -182,6 +190,14 @@ GET /api/v1/devices/{deviceId}/telemetry?metricType=CpuUsage&from=2026-09-07T00:
 The limit defaults to 500 and must be between 1 and 1,000. Filtering, ordering, and limiting run in MySQL with no-tracking queries.
 
 The latest endpoint returns one newest point per metric type. Metrics may have different timestamps. Its top-level `timestamp` is the newest timestamp among returned metrics, or `null` when none exist.
+
+## Redis current state
+
+Redis is an optimization for dashboard-oriented current reads; it never replaces MySQL historical storage. Each device uses one Redis hash named `metricshub:device:{deviceId}:state`. Metadata fields store the device key, status, and last-seen time. Each metric has a readable JSON hash field and a companion numeric timestamp field.
+
+Updates run through one atomic Lua script. Partial batches update only their included metric fields, so other latest values remain. Per-metric timestamp comparisons prevent older or concurrently delayed telemetry from moving current values backward. The same comparison protects `LastSeenAt` and status. Every successful state update refreshes a configurable 24-hour TTL (`Redis:StateTtlHours`); expiration is cache cleanup only, not offline detection.
+
+`GET /api/v1/devices/{deviceId}/state` first verifies the device in MySQL and reads Redis. On a cache miss it executes the existing server-side latest-row-per-metric query, rebuilds the state (including an empty metric list for a new device), repopulates Redis, and returns it. A successful physical device deletion removes its state key; a history-blocked deletion leaves it intact.
 
 Status behavior:
 
@@ -223,7 +239,7 @@ The initial schema contains:
 
 Deleting a device is restricted while historical telemetry or alerts still reference it. Deleting optional associations clears their foreign key instead of removing alert history. UTC value converters restore `DateTimeKind.Utc` when MySQL values are materialized.
 
-### Start MySQL locally
+### Start MySQL and Redis locally
 
 Create a local environment file and replace its example-only passwords:
 
@@ -233,7 +249,7 @@ docker compose up -d
 docker compose ps
 ```
 
-Docker Compose starts only MySQL 8.4, maps port 3306 by default, performs a health check, and stores database files in the `metricshub_mysql_data` volume.
+Docker Compose starts MySQL 8.4 and Redis 8.10.1, health-checks both services, maps ports 3306 and 6379 by default, and persists them in separate named volumes.
 
 ### Configure the application
 
@@ -241,9 +257,19 @@ Docker Compose starts only MySQL 8.4, maps port 3306 by default, performs a heal
 
 ```powershell
 $env:ConnectionStrings__MySql='Server=localhost;Port=3306;Database=metricshub;User=metricshub_dev;Password=your-local-password'
+$env:ConnectionStrings__Redis='localhost:6379'
 ```
 
-No connection credentials are committed. `appsettings.json` retains an empty placeholder, and environment variables override it locally.
+Double underscores map to `ConnectionStrings:MySql` and `ConnectionStrings:Redis`. No credentials are committed; `appsettings.json` keeps empty connection placeholders. The Redis key prefix and TTL can also be overridden with `Redis__KeyPrefix` and `Redis__StateTtlHours`.
+
+Inspect current state without logging secrets:
+
+```powershell
+docker compose exec redis redis-cli
+SCAN 0 MATCH metricshub:device:*:state
+HGETALL metricshub:device:{deviceId}:state
+TTL metricshub:device:{deviceId}:state
+```
 
 ### Apply and inspect migrations
 
@@ -267,7 +293,7 @@ Useful SQL commands include `SHOW TABLES;` and `DESCRIBE TelemetryPoints;`.
 
 ### Run integration tests
 
-Persistence integration tests use Testcontainers to create and automatically remove an isolated MySQL 8.4 container. Docker Desktop must be running:
+Persistence/API integration tests use Testcontainers to create and automatically remove isolated MySQL 8.4 and Redis 8.10.1 containers. Docker Desktop must be running:
 
 ```powershell
 $env:METRICSHUB_RUN_INTEGRATION_TESTS='true'
@@ -276,7 +302,7 @@ dotnet test tests/MetricsHub.IntegrationTests
 
 Without that explicit opt-in, the Docker-backed tests are reported as skipped. They never substitute EF Core's in-memory provider.
 
-The suite includes direct persistence tests and full REST API tests hosted through `WebApplicationFactory` against real MySQL.
+The suite includes direct persistence tests and full REST API tests hosted through `WebApplicationFactory` against real MySQL and Redis. Redis tests cover partial and out-of-order updates, atomic same-device concurrency, cache rebuild, key cleanup, and durable MySQL ingestion during a Redis outage. Tests use unique device IDs and an isolated test Redis database; cache-sensitive cases flush that isolated database.
 
 ## Restore and build
 
@@ -306,4 +332,6 @@ Open the URL printed in the terminal. The current UI is the minimal Blazor start
 
 ## Configuration and secrets
 
-`src/MetricsHub.Api/appsettings.json` contains empty `MySql` and `Redis` placeholders. MySQL uses `ConnectionStrings__MySql`; Redis remains unused until Phase 6. Keep credentials outside tracked configuration through user secrets, environment variables, or ignored local files.
+`src/MetricsHub.Api/appsettings.json` contains empty `MySql` and `Redis` connection placeholders. Use `ConnectionStrings__MySql` and `ConnectionStrings__Redis`. Keep credentials outside tracked configuration through user secrets, environment variables, or ignored local files.
+
+SignalR and browser push are not implemented. The Blazor real-time dashboard is not implemented. Offline detection and alert evaluation are not implemented. The real system Agent is not implemented. Those capabilities remain later phases.

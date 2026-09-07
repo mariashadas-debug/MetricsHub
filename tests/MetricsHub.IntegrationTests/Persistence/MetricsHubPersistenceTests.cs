@@ -4,8 +4,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace MetricsHub.IntegrationTests.Persistence;
 
+[Collection(InfrastructureCollection.Name)]
 public sealed class MetricsHubPersistenceTests(MySqlDatabaseFixture fixture)
-    : IClassFixture<MySqlDatabaseFixture>
 {
     [MySqlIntegrationFact]
     public async Task Device_CanBePersistedAndLoaded()

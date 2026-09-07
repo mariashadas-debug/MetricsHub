@@ -1,12 +1,16 @@
 using MetricsHub.Application.Abstractions.Persistence;
 using MetricsHub.Application.Common.Exceptions;
+using MetricsHub.Application.DeviceStates;
 using MetricsHub.Domain.Entities;
+using Microsoft.Extensions.Logging;
 
 namespace MetricsHub.Application.Telemetry;
 
 internal sealed class TelemetryService(
     IDeviceRepository deviceRepository,
-    ITelemetryRepository telemetryRepository) : ITelemetryService
+    ITelemetryRepository telemetryRepository,
+    IDeviceStateStore deviceStateStore,
+    ILogger<TelemetryService> logger) : ITelemetryService
 {
     public const int MaximumHistoryLimit = 1000;
 
@@ -55,6 +59,35 @@ internal sealed class TelemetryService(
         telemetryRepository.AddRange(points);
         device.RecordTelemetry(command.Timestamp);
         await telemetryRepository.SaveChangesAsync(cancellationToken);
+
+        var state = new DeviceState(
+            device.Id,
+            device.DeviceKey,
+            device.Status,
+            device.LastSeenAt,
+            points
+                .GroupBy(point => point.MetricType)
+                .ToDictionary(
+                    group => group.Key,
+                    group =>
+                    {
+                        var point = group.Last();
+                        return new LatestMetricState(
+                            point.MetricType,
+                            point.Value,
+                            point.Unit,
+                            point.Timestamp);
+                    }));
+
+        try
+        {
+            await deviceStateStore.SetAsync(state, cancellationToken);
+            logger.LogDebug("Redis state updated: DeviceId={DeviceId}", device.Id);
+        }
+        catch (DeviceStateStoreException exception)
+        {
+            logger.LogWarning(exception, "Redis state update failed: DeviceId={DeviceId}", device.Id);
+        }
     }
 
     public async Task<IReadOnlyList<TelemetryPointResponse>> GetHistoryAsync(
@@ -85,6 +118,57 @@ internal sealed class TelemetryService(
             deviceId,
             metrics.Length == 0 ? null : metrics.Max(metric => metric.Timestamp),
             metrics);
+    }
+
+    public async Task<DeviceState> GetStateAsync(Guid deviceId, CancellationToken cancellationToken)
+    {
+        var device = await deviceRepository.GetByIdAsync(deviceId, false, cancellationToken)
+            ?? throw new NotFoundException($"Device '{deviceId}' was not found.");
+
+        var redisAvailable = true;
+
+        try
+        {
+            var cached = await deviceStateStore.GetAsync(deviceId, cancellationToken);
+            if (cached is not null)
+            {
+                return cached;
+            }
+        }
+        catch (DeviceStateStoreException exception)
+        {
+            redisAvailable = false;
+            logger.LogWarning(exception, "Redis state read failed: DeviceId={DeviceId}", deviceId);
+        }
+
+        var latestPoints = await telemetryRepository.GetLatestByMetricAsync(deviceId, cancellationToken);
+        var rebuilt = new DeviceState(
+            device.Id,
+            device.DeviceKey,
+            device.Status,
+            device.LastSeenAt,
+            latestPoints.ToDictionary(
+                point => point.MetricType,
+                point => new LatestMetricState(
+                    point.MetricType,
+                    point.Value,
+                    point.Unit,
+                    point.Timestamp)));
+
+        if (redisAvailable)
+        {
+            try
+            {
+                await deviceStateStore.SetAsync(rebuilt, cancellationToken);
+                logger.LogInformation("Redis state rebuilt from MySQL: DeviceId={DeviceId}", deviceId);
+            }
+            catch (DeviceStateStoreException exception)
+            {
+                logger.LogWarning(exception, "Redis state rebuild write failed: DeviceId={DeviceId}", deviceId);
+            }
+        }
+
+        return rebuilt;
     }
 
     private async Task EnsureDeviceExists(Guid deviceId, CancellationToken cancellationToken)
