@@ -48,18 +48,18 @@ MetricsHub/
 
 ## Project responsibilities
 
-- **MetricsHub.Domain**: Core entities, enums, and domain rules. The domain model begins in Phase 2.
+- **MetricsHub.Domain**: Core entities, enums, and domain rules. Its objects protect required values and lifecycle state without depending on persistence or web frameworks.
 - **MetricsHub.Application**: Use cases, services, DTOs, and interfaces. It references only Domain.
 - **MetricsHub.Infrastructure**: Future persistence, caching, and infrastructure services. It references Domain and Application; no external systems are connected yet.
 - **MetricsHub.Api**: ASP.NET Core HTTP host. It exposes `GET /health`, uses dependency injection, enables HTTPS redirection, and publishes an OpenAPI document in Development.
 - **MetricsHub.Web**: Minimal Blazor Web App. No monitoring dashboard or external connections have been added.
-- **MetricsHub.UnitTests**: xUnit project prepared for future Domain and Application tests. It contains no placeholder tests.
+- **MetricsHub.UnitTests**: xUnit tests for Domain and, in future phases, Application behavior.
 - **MetricsHub.IntegrationTests**: xUnit project prepared for future API and Infrastructure integration tests. It contains no database tests.
 
 ## Development roadmap
 
-1. **Phase 1 - Solution architecture**
-2. **Phase 2 - Domain model**
+1. **Phase 1 - Solution architecture** — complete
+2. **Phase 2 - Domain model** — complete/current
 3. **Phase 3 - MySQL and EF Core**
 4. **Phase 4 - REST API**
 5. **Phase 5 - Metrics simulator**
@@ -71,7 +71,22 @@ MetricsHub/
 
 ## Current status
 
-**Phase 1 - Solution architecture** is complete. The solution boundaries, project references, API health endpoint, safe configuration placeholders, and runnable Blazor foundation are in place. Later-phase features are intentionally not implemented.
+**Phase 2 - Domain model** is complete. Phase 1 architecture remains intact, and the dependency-free domain now models monitored devices, historical telemetry, alert rules, and alerts. Database persistence will be added in Phase 3; no database or infrastructure implementation exists yet.
+
+## Domain model
+
+- **Device** represents a uniquely keyed monitored server, workstation, virtual machine, container, or custom system. It owns collections of its telemetry, alerts, and alert rules and starts enabled with an unknown status.
+- **TelemetryPoint** represents one historical metric measurement for a device, including its metric type, numeric value, unit, and UTC timestamp.
+- **AlertRule** describes a threshold comparison for a metric. A rule can belong to one device or remain global for future default-rule support.
+- **Alert** records a detected condition for a device. It starts unresolved and can be resolved once through domain behavior that records the UTC resolution time.
+
+The domain uses these enums:
+
+- **DeviceType** classifies devices as `Server`, `Workstation`, `VirtualMachine`, `Container`, or `Custom`.
+- **DeviceStatus** represents `Unknown`, `Online`, `Offline`, `Warning`, or `Critical` health.
+- **MetricType** identifies CPU, memory, disk, inbound network, outbound network, or uptime measurements.
+- **AlertSeverity** classifies alerts and rules as `Info`, `Warning`, or `Critical`.
+- **ComparisonOperator** expresses greater-than, greater-than-or-equal, less-than, less-than-or-equal, or equality threshold comparisons.
 
 ## Restore and build
 
